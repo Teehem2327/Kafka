@@ -520,3 +520,134 @@ kubectl get kraftmigrationjob -o yaml -w
 If you want, I can also create the full Post-Migration Cleanup script including the exact YAML to remove ZooKeeper from Kafka CR and delete the ZooKeeper pods, so the migration is literally copy-paste ready from 6 → 9.
 
 Do you want me to do that next?
+
+
+
+
+
+😂😂😂😂
+
+Perfect! Here’s a fully copy-paste-ready, production-grade Post-Migration Cleanup script, including the exact Kafka CR edit to remove ZooKeeper and commands to delete the ZooKeeper pods safely.
+
+⚠ Important: Only execute this after all regions have reached Phase: COMPLETE and passed at least 24-hour stability validation.
+
+⸻
+
+9. Post-Migration Cleanup
+
+9.1 Switch to Each Region Context
+
+You must perform cleanup per region.
+
+# Central
+kubectl config use-context central-cluster
+kubectl cluster-info
+
+# East
+kubectl config use-context east-cluster
+kubectl cluster-info
+
+# West
+kubectl config use-context west-cluster
+kubectl cluster-info
+
+✅ Confirm you are in the correct cluster before applying any changes.
+
+⸻
+
+9.2 Update Kafka CR – Remove ZooKeeper
+
+Create a YAML file kafka-kraft-only.yaml for each region:
+
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: kafka-prod
+spec:
+  replicas: 3
+
+  # ZooKeeper removed
+  # zookeeper:
+  #   endpoint: zookeeper:2181
+
+  kraftController:
+    enabled: true
+    name: kraftcontroller
+
+  configOverrides:
+    server:
+      - "process.roles=broker,controller"
+      - "controller.listener.names=CONTROLLER"
+      - "inter.broker.listener.name=PLAINTEXT"
+
+Apply Kafka CR changes:
+
+kubectl apply -f kafka-kraft-only.yaml
+kubectl get pods -w
+
+✅ Ensure brokers are Running/Ready and no pods are restarting unexpectedly.
+
+⸻
+
+9.3 Delete ZooKeeper Resource
+
+kubectl delete zookeeper zookeeper -n kafka-prod
+kubectl get pods -n kafka-prod | grep zookeeper
+
+✅ Confirm no ZooKeeper pods remain.
+
+⸻
+
+9.4 Validate External Access
+
+Test Kafka topic access using external bootstrap server:
+
+kafka-topics --bootstrap-server external.kafka.company.com:443 --list
+
+✅ Output must show:
+	•	All topics present
+	•	No SSL errors
+	•	No connection refused
+
+⸻
+
+9.5 Notes / Safety Gates
+	1.	Do not remove ZooKeeper before all regions are fully finalized.
+	2.	Always switch to the correct cluster context before applying CR changes.
+	3.	Monitor broker logs for 30–60 minutes after cleanup:
+
+kubectl logs kafka-0 | grep -i error
+
+✅ Brokers must remain stable.
+✅ No under-replicated partitions.
+✅ Controller quorum remains stable.
+
+⸻
+
+Optional: Full Script for All Regions
+
+You can execute this in sequence:
+
+for region in central-cluster east-cluster west-cluster; do
+  echo "Switching to $region..."
+  kubectl config use-context $region
+
+  echo "Applying Kafka CR without ZooKeeper..."
+  kubectl apply -f kafka-kraft-only.yaml
+
+  echo "Deleting ZooKeeper CR..."
+  kubectl delete zookeeper zookeeper -n kafka-prod
+  kubectl get pods -n kafka-prod | grep zookeeper || echo "No ZooKeeper pods found"
+
+  echo "Validating external access..."
+  kafka-topics --bootstrap-server external.kafka.company.com:443 --list
+done
+
+✅ This loops through each region sequentially, ensuring region-by-region cleanup and no simultaneous deletion.
+
+⸻
+
+If you want, I can also combine 6 → 9 in a single copy-paste-ready runbook with exact commands and YAML, so you could literally go from validation → finalize → cleanup in one go per region.
+
+Do you want me to do that next?
