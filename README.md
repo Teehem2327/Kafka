@@ -416,21 +416,107 @@ Enterprise safety gates	✅
 
 
 ⸻
-
-This version contains:
-	•	All critical migration phases
-	•	Explicit stability gates
-	•	Correct HOLD → DUAL_WRITE → COMPLETE flow
-	•	Region-by-region enforcement
-	•	Rollback window clarity
-	•	MRC enterprise constraints
-	•	No missing operational safeguards
+Perfect — here’s a fully copy-paste-ready, production-grade script for 6. Validation During Dual-Write and 7. Finalize to KRaft, assuming you are already switched into the region context (no mid-region context switching).
 
 ⸻
 
-If you’d like, I can now convert this into:
-	•	A fully structured GitHub repository
-	•	With per-region folders
-	•	YAML separated cleanly
-	•	Professional README formatting
-	•	Migration timeline diagram included
+6. Validation During Dual-Write
+
+⚠ Perform entirely in the current region context before moving to the next region.
+
+6.1 Produce / Consume Test
+
+# Produce test messages
+kubectl exec -it kafka-0 -- kafka-console-producer \
+  --bootstrap-server localhost:9092 \
+  --topic migration-test
+
+# Consume messages from beginning
+kubectl exec -it kafka-0 -- kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic migration-test \
+  --from-beginning
+
+✅ Ensure messages are flowing without delay.
+
+⸻
+
+6.2 Consumer Groups Validation
+
+kubectl exec -it kafka-0 -- kafka-consumer-groups \
+  --bootstrap-server localhost:9092 \
+  --describe --all-groups
+
+✅ No coordinator errors, consumer offsets correct.
+
+⸻
+
+6.3 ACL Validation
+
+kubectl exec -it kafka-0 -- kafka-acls \
+  --bootstrap-server localhost:9092 \
+  --list
+
+✅ All ACLs match pre-migration state.
+
+⸻
+
+6.4 Stability Gate
+
+# Monitor broker logs for errors
+kubectl logs kafka-0 | grep -i error
+
+	•	Minimum observation: 30–60 minutes
+	•	Stop migration if:
+	•	Continuous controller election retries
+	•	Metadata load failures
+	•	Broker crash loops
+
+Rollback must be triggered before proceeding to finalization if any issues detected.
+
+⸻
+
+7. Finalize to KRaft
+
+⚠ Perform per region only after full validation passes (6.x).
+
+7.1 Add Finalization Annotation
+
+Create kraftmigrationjob-finalize.yaml:
+
+apiVersion: platform.confluent.io/v1beta1
+kind: KRaftMigrationJob
+metadata:
+  name: kraftmigrationjob
+  namespace: kafka-prod
+  annotations:
+    platform.confluent.io/kraft-migration-trigger-finalize-to-kraft: "true"
+spec:
+  dependencies:
+    kafka:
+      name: kafka
+    kRaftController:
+      name: kraftcontroller
+
+Note: ZooKeeper reference is not required here, it will still be removed later in Post-Migration Cleanup.
+
+⸻
+
+7.2 Apply Finalization
+
+kubectl apply -f kraftmigrationjob-finalize.yaml
+kubectl get kraftmigrationjob -o yaml -w
+
+✅ Wait until Phase: COMPLETE before switching to the next region.
+
+⸻
+
+7.3 Notes
+	•	Do not switch region until COMPLETE is confirmed for the current cluster.
+	•	After all regions complete, you can proceed to 9. Post-Migration Cleanup for ZooKeeper removal.
+
+⸻
+
+If you want, I can also create the full Post-Migration Cleanup script including the exact YAML to remove ZooKeeper from Kafka CR and delete the ZooKeeper pods, so the migration is literally copy-paste ready from 6 → 9.
+
+Do you want me to do that next?
