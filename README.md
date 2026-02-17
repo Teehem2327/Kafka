@@ -327,6 +327,8 @@ kind: Kafka
 metadata:
   name: kafka
   namespace: confluent
+  annotations:
+    platform.confluent.io/kraft-migration-trigger-finalize: "true"
 
 spec:
   image:
@@ -345,7 +347,7 @@ spec:
         cpu: "1"
         memory: "4Gi"
 
-  # Enable Dual-Write Migration
+  # KRaft Migration Finalization
   kraftController:
     name: kraftcontroller
 
