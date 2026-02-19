@@ -1,299 +1,76 @@
-Perfect 👍 — I’ll give you a clean, enterprise-style sandbox deployment document you can reuse for testing your ZooKeeper → KRaft migration safely.
+Verify CFK Migration CR Lock
 
-Since you’re using:
-	•	Confluent for Kubernetes (CFK)
-	•	cp-server:7.8.0
-	•	OpenShift (oc)
-	•	Namespace: confluent
-	•	Multi-region model (hub / spoke)
-	•	Route-based external access
+When a `KRaftMigrationJob` is created, CFK automatically applies a migration lock annotation to the following resources:
 
-This will be aligned to your structure.
+* Kafka CR
+* ZooKeeper CR
+* KRaftController CR
 
-⸻
+This prevents unintended modifications during migration.
 
-📘 Engineer Runbook
+### Check for CR Lock
 
-Deploy Kafka Sandbox on Kubernetes (OpenShift)
+```bash
+oc get kafka kafka -n confluent -o yaml | grep kraft-migration-cr-lock
+oc get zookeeper zookeeper -n confluent -o yaml | grep kraft-migration-cr-lock
+oc get kraftcontroller kraftcontroller -n confluent -o yaml | grep kraft-migration-cr-lock
+```
 
-Purpose: Test ZooKeeper → KRaft Migration
+If the lock is present, the output will show:
 
-⸻
+```yaml
+platform.confluent.io/kraft-migration-cr-lock: "true"
+```
 
-1️⃣ Objective
+### Interpretation
 
-Deploy an isolated Kafka sandbox cluster in Kubernetes/OpenShift to:
-	•	Validate ZooKeeper-based deployment
-	•	Test dual-write migration
-	•	Validate finalize-to-KRaft
-	•	Test rollback safely
-	•	Verify MRC configuration logic
+If present:
 
-This sandbox must not affect production clusters.
+* Migration job is actively controlling the resources.
+* CR modifications are restricted.
+* This is expected behavior.
+* No action is required during migration.
 
-⸻
+---
 
-2️⃣ Architecture Overview
+# 8. Post-Migration Cleanup
 
-Sandbox Components:
-	•	1 Kafka cluster (3 brokers)
-	•	1 ZooKeeper cluster (3 nodes)
-	•	OpenShift route-based external access
-	•	LDAP-enabled MDS
-	•	CFK-managed resources
+## 🔓 Remove CFK Migration Lock
 
-Namespace isolation:
+After migration phase reaches:
 
-confluent-sandbox
+```
+Phase: COMPLETE
+```
 
-(Recommended to avoid conflict with prod)
+The migration lock must be manually released to allow future CR updates and upgrades.
 
-⸻
+### Release Lock
 
-3️⃣ Prerequisites
+```bash
+oc annotate kraftmigrationjob kraftmigrationjob \
+platform.confluent.io/kraft-migration-release-cr-lock=true \
+--namespace confluent
+```
 
-3.1 Platform Requirements
-	•	OpenShift cluster access
-	•	oc CLI configured
-	•	Cluster admin or namespace admin permissions
-	•	StorageClass available
-	•	CFK operator installed
+### Verify Lock Removal
 
-⸻
+```bash
+oc get kafka kafka -n confluent -o yaml | grep kraft-migration-cr-lock
+```
 
-3.2 Verify CFK Operator
+The annotation should no longer exist in:
 
-oc get pods -n confluent
+* Kafka CR
+* ZooKeeper CR
+* KRaftController CR
 
-You should see:
+### Important
 
-confluent-operator-xxxxx   Running
+Failure to remove the migration lock may:
 
+* Prevent future configuration updates
+* Block version upgrades
+* Interfere with GitOps or CI/CD pipelines
 
-⸻
-
-4️⃣ Create Sandbox Namespace
-
-oc new-project confluent-sandbox
-
-Verify:
-
-oc project confluent-sandbox
-
-
-⸻
-
-5️⃣ Deploy ZooKeeper (Sandbox)
-
-Create:
-
-zookeeper-sandbox.yaml
-
-apiVersion: platform.confluent.io/v1beta1
-kind: Zookeeper
-metadata:
-  name: zookeeper
-  namespace: confluent-sandbox
-
-spec:
-  replicas: 3
-  image:
-    application: docker.rtfx.aepsc.com/confluentinc/cp-zookeeper:7.8.0
-    init: docker.rtfx.aepsc.com/confluentinc/confluent-init-container:2.10.0
-
-  dataVolumeCapacity: 50Gi
-  logVolumeCapacity: 50Gi
-  oneReplicaPerNode: true
-
-  podTemplate:
-    resources:
-      limits:
-        cpu: "1"
-        memory: "4Gi"
-      requests:
-        cpu: "1"
-        memory: "2Gi"
-
-Apply:
-
-oc apply -f zookeeper-sandbox.yaml
-
-Wait:
-
-oc get pods -w
-
-All ZK pods must be Running.
-
-⸻
-
-6️⃣ Deploy Kafka (ZooKeeper Mode)
-
-kafka-sandbox.yaml
-
-apiVersion: platform.confluent.io/v1beta1
-kind: Kafka
-metadata:
-  name: kafka
-  namespace: confluent-sandbox
-
-spec:
-  replicas: 3
-
-  image:
-    application: docker.rtfx.aepsc.com/confluentinc/cp-server:7.8.0
-    init: docker.rtfx.aepsc.com/confluentinc/confluent-init-container:2.10.0
-
-  dataVolumeCapacity: 50Gi
-  oneReplicaPerNode: true
-
-  dependencies:
-    zookeeper:
-      endpoint: zookeeper:2181
-
-  podTemplate:
-    resources:
-      limits:
-        cpu: "2"
-        memory: "6Gi"
-      requests:
-        cpu: "1"
-        memory: "4Gi"
-
-  listeners:
-    external:
-      externalAccess:
-        route:
-          domain: sandbox.aepsc.com
-
-Apply:
-
-oc apply -f kafka-sandbox.yaml
-
-Wait for brokers:
-
-oc get pods -l platform.confluent.io/type=kafka -w
-
-
-⸻
-
-7️⃣ Validate Sandbox Health
-
-Check Under Replication
-
-oc exec -it kafka-0 -- \
-kafka-topics --bootstrap-server localhost:9092 --describe | grep UnderReplicated
-
-Must return:
-
-UnderReplicatedPartitions: 0
-
-
-⸻
-
-Produce & Consume Test
-
-Produce:
-
-oc exec -it kafka-0 -- \
-kafka-console-producer \
---bootstrap-server localhost:9092 \
---topic sandbox-test
-
-Consume:
-
-oc exec -it kafka-0 -- \
-kafka-console-consumer \
---bootstrap-server localhost:9092 \
---topic sandbox-test \
---from-beginning
-
-Messages must flow successfully.
-
-⸻
-
-8️⃣ Enable Migration Testing in Sandbox
-
-Now apply your migration workflow:
-	1.	Deploy kraftcontroller
-	2.	Enable dual-write annotation
-	3.	Validate DUAL_WRITE phase
-	4.	Finalize
-	5.	Remove ZooKeeper
-
-Because this is sandbox:
-	•	No production risk
-	•	Can test rollback safely
-	•	Can simulate instability scenarios
-
-⸻
-
-9️⃣ Rollback Testing (Sandbox Only)
-
-Before finalize:
-
-oc apply -f kafka-backup.yaml
-
-Delete controller:
-
-oc delete kafka kraftcontroller
-
-This allows you to rehearse recovery steps safely.
-
-⸻
-
-🔟 Post-Test Cleanup
-
-Delete sandbox environment completely:
-
-oc delete project confluent-sandbox
-
-Everything is removed cleanly.
-
-⸻
-
-1️⃣1️⃣ Why This Sandbox Design Is Correct
-	•	Namespace isolation
-	•	Independent ZK cluster
-	•	Independent Kafka cluster
-	•	Same CP version as prod
-	•	Same image registry
-	•	Same resource structure
-	•	Route-based external access
-	•	CFK-managed lifecycle
-
-It mirrors production behavior without risk.
-
-⸻
-
-🔐 Recommended Testing Checklist
-
-Before certifying migration logic:
-	•	Test under load
-	•	Test ACL validation
-	•	Test consumer group stability
-	•	Simulate broker restart during dual-write
-	•	Simulate controller restart
-	•	Confirm no metadata loss
-	•	Confirm topic retention unaffected
-	•	Confirm schema registry (if used) reconnects
-
-⸻
-
-🎯 Final Result
-
-After following this:
-
-You will have:
-	•	A fully functional ZooKeeper-based Kafka cluster
-	•	A safe environment to execute migration
-	•	A controlled validation workflow
-	•	A repeatable test procedure
-
-⸻
-
-If you want next, I can give you:
-	•	A production-grade sandbox GitOps folder structure
-	•	Or a visual migration phase diagram
-	•	Or a checklist document formatted for submission
-
-You’re building this the right way now.
+---
