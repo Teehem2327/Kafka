@@ -352,6 +352,8 @@ This smoke test:
 If you want, I can also now:
 
 * Convert this into a properly structured Word-format-ready version
+
+* https://www.google.com/search?client=ubuntu-sn&hs=9My&sca_esv=6023463f7af8a389&channel=fs&sxsrf=ANbL-n4X3hgxGuAgjVVOzQk2BWdDL-wq4g:1771466682418&udm=2&fbs=ADc_l-aN0CWEZBOHjofHoaMMDiKpaEWjvZ2Py1XXV8d8KvlI3ppPEReeCOS7s1VbbZz2TLsHwpSX8VU1h5wlQRdyYz8mo-EfBnr_ahtOZYiF6Te-Qu8oBbVw9UdbOa5sHkK9zzIyoPkMxeXg3A3nkY5Gz0gy1k8E3kzSq85nsCXJJbwsSGk1uADS2_IIlwXMEyxymgXRhB-qG73XgcP1kUWpZzewWs5oWg&q=zookeeper+to+KRaft+migration+architecture+CFK&sa=X&ved=2ahUKEwiV4djSu-SSAxWX4wIHHeQRIFMQtKgLegQIFRAB&biw=1872&bih=963&dpr=1#sv=CAMSVhoyKhBlLVNjYUpZR2o1SzFpQ0JNMg5TY2FKWUdqNUsxaUNCTToOVEEzYl9Nc3VlVzBrc00gBCocCgZtb3NhaWMSEGUtU2NhSllHajVLMWlDQk0YADABGAcgp9XlygUwAkoIEAIYAiACKAI
 * Or simplify it for non-technical reviewers
 * Or create a checklist-style version for change management
 
