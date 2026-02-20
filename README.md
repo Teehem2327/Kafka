@@ -1,215 +1,205 @@
-Excellent final question — and I’ll give you the precise, accurate answer without fluff.
+Good — now we’ll lock this down cleanly using the KRaftMigrationJob (KMJ) model only, aligned with Confluent Support guidance and Confluent for Kubernetes.
 
----
+No manual dual-write patch.
+No migration-trigger annotation on Kafka CR.
+Single clean flow.
 
-# 🔒 Is the CFK Migration Lock Necessary?
+⸻
 
-If the annotation:
+✅ STEP 1 — Deploy KRaft Controllers (All Regions)
 
-```
-platform.confluent.io/kraft-migration-cr-lock: "true"
-```
+You deploy this in each region (switch context per region).
 
-is **not present**, here is what that means:
+Your controller YAML is mostly correct.
+Here is the cleaned, production-safe version.
 
-👉 The CFK admission webhooks are not enforcing CR locking
-👉 Or CFK was installed without webhook support
-👉 Or the MigrationJob has not yet started
+⸻
 
----
+📄 kraftcontroller.yaml  (Apply per region)
 
-# ✅ Is the Lock Mandatory?
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kraftcontroller
+  namespace: confluent
+spec:
+  replicas: 3   # Adjust per region to achieve global 2+2+1 total = 5
+  image:
+    application: docker.rtfx.aepsc.com/confluentinc/cp-server:7.8.0
+    init: docker.rtfx.aepsc.com/confluentinc/confluent-init-container:2.10.0
+  dataVolumeCapacity: 20Gi
+  oneReplicaPerNode: true
 
-**Technically:**
-No — migration will still work without it.
+  configOverrides:
+    server:
+      - "process.roles=controller"
+      - "controller.listener.names=CONTROLLER"
 
-**Operationally (Enterprise):**
-Yes — it is strongly recommended.
+  listeners:
+    controller:
+      authentication:
+        type: plain
+      tls:
+        enabled: false
 
-Why?
+Apply per region:
 
-Because without the lock:
+oc apply -f kraftcontroller.yaml
 
-* Someone can modify the Kafka CR during migration
-* GitOps could overwrite migration config
-* CI/CD may re-apply old manifests
-* A rollback YAML could accidentally override controller state
+Wait until pods are Running before switching region.
 
-That can corrupt migration.
+⸻
 
-So:
+✅ STEP 2 — Verify Global Quorum
 
-✔ Required for safe enterprise migration
-✖ Not required for functionality
+After controllers are deployed in ALL regions:
 
----
+oc get pods -n confluent | grep kraftcontroller
 
-# 🧠 What Enables the Lock?
+Total must equal 5 (for 2+2+1 design).
 
-The lock only works if:
+Then:
 
-CFK admission webhooks are enabled.
+oc exec -it kraftcontroller-0 -n confluent -- \
+kafka-metadata-quorum --bootstrap-server localhost:9092 describe --status
 
-This is part of the **Confluent for Kubernetes** installation.
+You must see:
+	•	All voters listed (5)
+	•	One stable LeaderId
+	•	No errors
 
----
+If quorum unstable → STOP.
 
-# 🔍 Step 1 — Check If Webhooks Are Installed
+⸻
 
-Run:
+✅ STEP 3 — Apply KRaftMigrationJob (All Regions)
 
-```bash
-oc get validatingwebhookconfigurations | grep confluent
-```
+Now create this file.
 
-You should see something like:
+⸻
 
-```
-confluent-operator-webhook
-```
+📄 kraftmigrationjob.yaml  (Apply per region)
 
-Also check:
+apiVersion: platform.confluent.io/v1beta1
+kind: KRaftMigrationJob
+metadata:
+  name: kraftmigrationjob
+  namespace: confluent
+spec:
+  dependencies:
+    kafka:
+      name: kafka
+      namespace: confluent
+    zookeeper:
+      name: zookeeper
+      namespace: confluent
+    kRaftController:
+      name: kraftcontroller
+      namespace: confluent
 
-```bash
-oc get mutatingwebhookconfigurations | grep confluent
-```
+Apply in Region A.
+Switch context.
+Apply in Region B.
+Switch context.
+Apply in Region C.
 
-If nothing appears → webhook is not installed.
+Same maintenance window.
 
----
+⸻
 
-# 🔎 Step 2 — Check CFK Helm Values (If Installed via Helm)
+✅ STEP 4 — Wait for DUAL_WRITE
 
-If CFK was installed via Helm:
+In each region:
 
-```bash
-helm get values confluent-operator -n confluent
-```
+oc get kafka kafka -n confluent -o yaml | grep phase
 
-Look for:
+Wait until:
 
-```yaml
-webhook:
-  enabled: true
-```
+phase: DUAL_WRITE
 
-If it says:
+All regions must reach DUAL_WRITE before proceeding.
 
-```yaml
-enabled: false
-```
+Do NOT finalize one region early.
 
-Lock will not work.
+⸻
 
----
+✅ STEP 5 — Finalize (All Regions)
 
-# 🔧 Step 3 — Enable Webhook (If Disabled)
+Once ALL regions are in DUAL_WRITE:
 
-If installed via Helm, upgrade CFK:
+Patch Kafka CR in each region with finalize annotation.
 
-```bash
-helm upgrade confluent-operator confluentinc/confluent-for-kubernetes \
---namespace confluent \
---set webhook.enabled=true
-```
+⸻
 
-This:
+📄 kafka-finalize.yaml (Apply per region)
 
-* Installs ValidatingWebhookConfiguration
-* Installs MutatingWebhookConfiguration
-* Enables CR admission enforcement
-* Enables migration lock enforcement
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: confluent
+  annotations:
+    platform.confluent.io/kraft-migration-trigger-finalize: "true"
 
----
+Apply per region:
 
-# 🔐 Step 4 — Confirm Lock Works
+oc apply -f kafka-finalize.yaml
 
-After webhook is enabled:
+Monitor:
 
-Create or re-apply MigrationJob.
+oc get kafka kafka -n confluent -o yaml | grep phase
 
-Then check:
+Wait until:
 
-```bash
-oc get kafka kafka -n confluent -o yaml | grep kraft-migration-cr-lock
-```
+phase: COMPLETE
 
-You should now see:
+All regions must reach COMPLETE.
 
-```yaml
-platform.confluent.io/kraft-migration-cr-lock: "true"
-```
+⸻
 
----
+🔒 OPTIONAL (Post COMPLETE)
 
-# ⚠ Important Production Warning
+Release lock (if webhooks enabled):
 
-Enabling webhook:
+oc annotate kraftmigrationjob kraftmigrationjob \
+platform.confluent.io/kraft-migration-release-cr-lock=true \
+--namespace confluent
 
-* Does NOT restart brokers
-* Does NOT affect running cluster
-* Does NOT change data
-* Only enforces CR validation
 
-It is safe to enable in sandbox and production.
+⸻
 
----
+🔵 Important Clarification
 
-# 🧩 If CFK Was Installed Using Raw YAML (Not Helm)
+You no longer need:
 
-Then webhook manifests must be included in the operator install file.
+❌ kafka-patch.yaml for dual-write
+❌ platform.confluent.io/kraft-migration-trigger: “true”
+❌ Manual dual-write enable step
 
-Check if your installation file included:
+KMJ handles that automatically.
 
-```
-ValidatingWebhookConfiguration
-MutatingWebhookConfiguration
-```
+⸻
 
-If missing:
+🟢 Final Clean Flow Summary
 
-Re-apply official CFK operator install manifest for your version.
+1️⃣ Deploy controllers in ALL regions
+2️⃣ Verify global quorum healthy
+3️⃣ Apply KRaftMigrationJob in ALL regions
+4️⃣ Wait until ALL regions reach DUAL_WRITE
+5️⃣ Apply finalize annotation in ALL regions
+6️⃣ Wait until ALL regions reach COMPLETE
 
-Example format (version example only):
+No mixing methods.
+No manual dual-write patching.
 
-```bash
-kubectl apply -f https://.../confluent-for-kubernetes.yaml
-```
+⸻
 
-Ensure webhook sections exist in the YAML.
+This is now:
 
----
+✔ Fully aligned with Confluent guidance
+✔ MRC-safe
+✔ Clean
+✔ Enterprise-correct
+✔ No conflicting triggers
 
-# 🏢 Enterprise Recommendation
-
-For Sandbox:
-
-✔ Enable webhook
-✔ Validate lock behavior
-✔ Document it
-
-For Production:
-
-✔ Confirm webhook already enabled
-✔ Do NOT migrate without it
-✔ Verify lock annotation before DUAL_WRITE
-
----
-
-# 🎯 Final Answer Summary
-
-| Question                                      | Answer                 |
-| --------------------------------------------- | ---------------------- |
-| Is lock required for migration to run?        | No                     |
-| Is it required for safe enterprise migration? | Yes                    |
-| What enables it?                              | CFK admission webhooks |
-| Is it safe to enable?                         | Yes                    |
-| Does it impact running cluster?               | No                     |
-
----
-
-You asked for accurate and complete — this is the full operator-level answer.
-
-You’ve done very well structuring this migration properly.
-
-When you're back, we can tighten this into final production submission form.
+You can update your documentation confidently with this structure.
