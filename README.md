@@ -1,22 +1,23 @@
-Good — now we’ll lock this down cleanly using the KRaftMigrationJob (KMJ) model only, aligned with Confluent Support guidance and Confluent for Kubernetes.
+Good — now we’ll lock this down cleanly using the **KRaftMigrationJob (KMJ) model only**, aligned with Confluent Support guidance and **Confluent for Kubernetes**.
 
 No manual dual-write patch.
 No migration-trigger annotation on Kafka CR.
 Single clean flow.
 
-⸻
+---
 
-✅ STEP 1 — Deploy KRaft Controllers (All Regions)
+# ✅ STEP 1 — Deploy KRaft Controllers (All Regions)
 
-You deploy this in each region (switch context per region).
+You deploy this in **each region** (switch context per region).
 
 Your controller YAML is mostly correct.
 Here is the cleaned, production-safe version.
 
-⸻
+---
 
-📄 kraftcontroller.yaml  (Apply per region)
+## 📄 `kraftcontroller.yaml`  (Apply per region)
 
+```yaml
 apiVersion: platform.confluent.io/v1beta1
 kind: Kafka
 metadata:
@@ -41,45 +42,54 @@ spec:
         type: plain
       tls:
         enabled: false
+```
 
 Apply per region:
 
+```bash
 oc apply -f kraftcontroller.yaml
+```
 
 Wait until pods are Running before switching region.
 
-⸻
+---
 
-✅ STEP 2 — Verify Global Quorum
+# ✅ STEP 2 — Verify Global Quorum
 
 After controllers are deployed in ALL regions:
 
+```bash
 oc get pods -n confluent | grep kraftcontroller
+```
 
 Total must equal 5 (for 2+2+1 design).
 
 Then:
 
+```bash
 oc exec -it kraftcontroller-0 -n confluent -- \
 kafka-metadata-quorum --bootstrap-server localhost:9092 describe --status
+```
 
 You must see:
-	•	All voters listed (5)
-	•	One stable LeaderId
-	•	No errors
+
+* All voters listed (5)
+* One stable LeaderId
+* No errors
 
 If quorum unstable → STOP.
 
-⸻
+---
 
-✅ STEP 3 — Apply KRaftMigrationJob (All Regions)
+# ✅ STEP 3 — Apply KRaftMigrationJob (All Regions)
 
 Now create this file.
 
-⸻
+---
 
-📄 kraftmigrationjob.yaml  (Apply per region)
+## 📄 `kraftmigrationjob.yaml`  (Apply per region)
 
+```yaml
 apiVersion: platform.confluent.io/v1beta1
 kind: KRaftMigrationJob
 metadata:
@@ -96,6 +106,7 @@ spec:
     kRaftController:
       name: kraftcontroller
       namespace: confluent
+```
 
 Apply in Region A.
 Switch context.
@@ -105,34 +116,39 @@ Apply in Region C.
 
 Same maintenance window.
 
-⸻
+---
 
-✅ STEP 4 — Wait for DUAL_WRITE
+# ✅ STEP 4 — Wait for DUAL_WRITE
 
 In each region:
 
+```bash
 oc get kafka kafka -n confluent -o yaml | grep phase
+```
 
 Wait until:
 
+```yaml
 phase: DUAL_WRITE
+```
 
 All regions must reach DUAL_WRITE before proceeding.
 
 Do NOT finalize one region early.
 
-⸻
+---
 
-✅ STEP 5 — Finalize (All Regions)
+# ✅ STEP 5 — Finalize (All Regions)
 
 Once ALL regions are in DUAL_WRITE:
 
 Patch Kafka CR in each region with finalize annotation.
 
-⸻
+---
 
-📄 kafka-finalize.yaml (Apply per region)
+## 📄 `kafka-finalize.yaml` (Apply per region)
 
+```yaml
 apiVersion: platform.confluent.io/v1beta1
 kind: Kafka
 metadata:
@@ -140,47 +156,55 @@ metadata:
   namespace: confluent
   annotations:
     platform.confluent.io/kraft-migration-trigger-finalize: "true"
+```
 
 Apply per region:
 
+```bash
 oc apply -f kafka-finalize.yaml
+```
 
 Monitor:
 
+```bash
 oc get kafka kafka -n confluent -o yaml | grep phase
+```
 
 Wait until:
 
+```yaml
 phase: COMPLETE
+```
 
 All regions must reach COMPLETE.
 
-⸻
+---
 
-🔒 OPTIONAL (Post COMPLETE)
+# 🔒 OPTIONAL (Post COMPLETE)
 
 Release lock (if webhooks enabled):
 
+```bash
 oc annotate kraftmigrationjob kraftmigrationjob \
 platform.confluent.io/kraft-migration-release-cr-lock=true \
 --namespace confluent
+```
 
+---
 
-⸻
-
-🔵 Important Clarification
+# 🔵 Important Clarification
 
 You no longer need:
 
 ❌ kafka-patch.yaml for dual-write
-❌ platform.confluent.io/kraft-migration-trigger: “true”
+❌ platform.confluent.io/kraft-migration-trigger: "true"
 ❌ Manual dual-write enable step
 
 KMJ handles that automatically.
 
-⸻
+---
 
-🟢 Final Clean Flow Summary
+# 🟢 Final Clean Flow Summary
 
 1️⃣ Deploy controllers in ALL regions
 2️⃣ Verify global quorum healthy
@@ -192,7 +216,7 @@ KMJ handles that automatically.
 No mixing methods.
 No manual dual-write patching.
 
-⸻
+---
 
 This is now:
 
