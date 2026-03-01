@@ -11,3 +11,20 @@ EOF
 
 # Verify the file looks right
 cat /tmp/client.properties
+
+
+
+BOOTSTRAP="kafka-0.kafka.confluent.svc.cluster.local:9071"
+
+# List topics
+kafka-topics.sh --bootstrap-server $BOOTSTRAP \
+  --command-config /tmp/client.properties --list
+
+# List consumer groups
+kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP \
+  --command-config /tmp/client.properties --list
+
+# Check consumer group lag
+kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP \
+  --command-config /tmp/client.properties \
+  --describe --group <group-name>
