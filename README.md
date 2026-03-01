@@ -28,3 +28,16 @@ kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP \
 kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP \
   --command-config /tmp/client.properties \
   --describe --group <group-name>
+
+
+
+
+# Replace YOUR_TRUSTSTORE_PASSWORD and credentials with real values from above
+cat > /tmp/client.properties << 'EOF'
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+ssl.truststore.location=/mnt/sslcerts/aep-kafka-tls/truststore.p12
+ssl.truststore.type=PKCS12
+ssl.truststore.password=YOUR_TRUSTSTORE_PASSWORD
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="YOUR_USERNAME" password="YOUR_PASSWORD";
+EOF
